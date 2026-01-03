@@ -4,9 +4,28 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib.ticker as ticker
 from lifelines import CoxPHFitter
+import matplotlib.patches as mpatches
+from matplotlib import font_manager, rc
+import platform
+
+# 한글 폰트 설정
+plt.rcParams['axes.unicode_minus'] = False
+
+if platform.system() == 'Windows':
+    try:
+        # 윈도우 폰트 경로 직접 지정으로 에러 방지
+        path = "c:/Windows/Fonts/malgun.ttf"
+        font_name = font_manager.FontProperties(fname=path).get_name()
+        rc('font', family=font_name)
+    except:
+        plt.rcParams['font.family'] = 'Malgun Gothic'
+elif platform.system() == 'Darwin':
+    rc('font', family='AppleGothic')
+else:
+    print("Warning: 한글 폰트가 지원되지 않는 환경일 수 있습니다.")
 
 # =========================================================
-# [Part 1] 데이터 생성 (기존 로직 100% 유지)
+# [Part 1] 데이터 생성
 # =========================================================
 np.random.seed(42)
 N_SAMPLES = 5000
@@ -34,7 +53,7 @@ E = (T < TIME_HORIZON).astype(int)
 df = pd.DataFrame({'T': T, 'E': E, 'HbA1c': hba1c, 'CV': cv, 'TIR': tir, 'Hazard': hazard_score})
 
 # =========================================================
-# [Part 2] 통계적 모델 검증 (C-index, AIC)
+# [Part 2] 통계적 모델 검증
 # =========================================================
 print("=" * 60)
 print("[Step 1: 통계적 모델 성능 비교]")
@@ -97,7 +116,6 @@ for cutoff in GRADE_CUTOFFS:
     ref_score = np.exp(BETA_HBA1C * (cutoff - 5.6) + BETA_CV * (ref_cv - 36) + BETA_TIR * (ref_tir - 70))
     new_thresholds.append(ref_score)
 
-
 def get_old_grade(val):
     if val < 5.7: return 1
     if val < 6.5: return 2
@@ -105,14 +123,12 @@ def get_old_grade(val):
     if val < 9.0: return 4
     return 5
 
-
 def get_new_grade(val):
     if val < new_thresholds[0]: return 1
     if val < new_thresholds[1]: return 2
     if val < new_thresholds[2]: return 3
     if val < new_thresholds[3]: return 4
     return 5
-
 
 df['Old_Grade'] = df['HbA1c'].apply(get_old_grade)
 df['New_Grade'] = df['Hazard'].apply(get_new_grade)
@@ -151,23 +167,20 @@ plt.show()
 # [Part 4] 경제성 분석 (명목 기준)
 # =========================================================
 CLAIM_AMOUNT = 30_000_000
-GRADE_PREMIUMS_LTV = {
-    1: 6_000_000, 2: 8_000_000, 3: 10_000_000, 4: 12_000_000, 5: 0
-}
+GRADE_PREMIUMS_LTV = {1: 6_000_000, 2: 8_000_000, 3: 10_000_000, 4: 12_000_000, 5: 0}
 CONVERSION_RATE = 0.5
 VARIABLE_COST_RATE = 0.30
 FIXED_COST = 50_000_000
 
 profits = []
 breakdown = {
-    'Loss_Avoidance': 0,  # 사고 손실 방어 (+)
-    'New_Revenue': 0,  # 신규 매출 (+)
-    'Opportunity_Cost': 0,  # 기회비용 손실 (-)
-    'Wrong_Acq_Loss': 0  # 잘못된 유치 (-)
+    'Loss_Avoidance': 0,
+    'New_Revenue': 0,
+    'Opportunity_Cost': 0,
+    'Wrong_Acq_Loss': 0
 }
 
-# [수정] Part 7 CSM 계산의 일관성을 위해 '누가 반응했는지'를 기록합니다.
-# 난수 생성 순서나 결과에 전혀 영향을 주지 않으면서 리스트에만 담습니다.
+# CSM 계산 시 정합성을 위해 반응 여부(is_reacting)를 생성 및 고정
 is_reacting_list = []
 
 for idx, row in df.iterrows():
@@ -178,7 +191,7 @@ for idx, row in df.iterrows():
 
     benefit = 0
     is_reacting = (np.random.rand() < CONVERSION_RATE)  # 50% 확률로 행동
-    is_reacting_list.append(is_reacting)  # 기록만 함
+    is_reacting_list.append(is_reacting)
 
     if row['Migration'] > 0:  # 보험료 인상 -> 이탈
         if is_reacting:
@@ -215,7 +228,7 @@ for idx, row in df.iterrows():
     profits.append(benefit)
 
 df['Economic_Value'] = profits
-df['Is_Reacting'] = is_reacting_list  # 데이터프레임에 저장 (Part 7용)
+df['Is_Reacting'] = is_reacting_list
 total_benefit = df['Economic_Value'].sum()
 
 # ---------------------------------------------------------
@@ -234,10 +247,6 @@ print("=" * 60)
 # =========================================================
 # [Part 5] BEP 분석 및 결과
 # =========================================================
-
-# 폰트 및 스타일 설정
-plt.rcParams['font.family'] = 'Malgun Gothic'
-plt.rcParams['axes.unicode_minus'] = False
 
 # 시뮬레이션 결과 계산
 cgm_prices = np.arange(0, 200000, 100)
@@ -286,7 +295,7 @@ print("[Step 3: IFRS 17 RA(위험조정) 산출 및 CSM 효과 분석]")
 
 # 설정 변수
 N_ITERATIONS = 5000  # 몬테카를로 시뮬레이션 횟수
-CONFIDENCE_LEVEL = 0.995  # IFRS 17 신뢰수준 (보통 75~90% 사이 사용)
+CONFIDENCE_LEVEL = 0.995  # IFRS 17 / K-ICS 신뢰수준
 CLAIM_AMT = 30_000_000  # 사고당 보험금
 
 # 1. 각 모델별 사고 확률 예측 (10년 내 사고 확률)
@@ -346,7 +355,7 @@ plt.tight_layout()
 plt.show()
 
 # =========================================================
-# [Part 7] IFRS 17 CSM 산출 (PV 적용 추가)
+# [Part 7] IFRS 17 CSM 산출 (PV 적용)
 # =========================================================
 print("=" * 60)
 print("[Step 4: IFRS 17 CSM 산출 (할인율 적용)]")
@@ -356,7 +365,7 @@ CGM_PRICE = 60000  # 6만원
 FIXED_COST_VAL = 50000000  # 5천만원
 
 delta_pv_premium = 0
-delta_pv_claim_benefit = 0  # 보험금 절감 이익 (양수)
+delta_pv_claim_benefit = 0  # 보험금 절감 이익
 
 # 1. 보험료 및 보험금 PV 계산 Loop
 # Part 4에서 저장한 'Is_Reacting' 정보를 그대로 사용하여 정합성 유지
@@ -423,153 +432,45 @@ print(f"4. RA 감소 효과 (PV)     : +{delta_pv_ra_benefit / 1e8:.2f} 억 원 
 print("-" * 40)
 print(f"▶ 총 CSM(미래 이익) 증대 : +{total_csm_impact / 1e8:.2f} 억 원")
 
-# [Visualization 5] CSM Waterfall
-cats = ['Premium\n(PV)', 'Claims\n(Savings PV)', 'Expenses\n(Cost PV)', 'RA\n(Reduction PV)', 'Total CSM\nIncrease']
-vals = [delta_pv_premium, delta_pv_claim_benefit, -total_expense_pv, delta_pv_ra_benefit, total_csm_impact]
-cols = ['#1f77b4', '#2ca02c', '#d62728', '#2ca02c', 'navy']
-
-starts = [0]
-cur = 0
-for v in vals[:-1]:
-    cur += v
-    starts.append(cur)
-starts.append(0)
-
-plt.figure(figsize=(10, 6))
-for i in range(len(cats)):
-    if i == len(cats) - 1:
-        plt.bar(cats[i], vals[i], color=cols[i], edgecolor='black', zorder=3)
-        plt.text(cats[i], vals[i] + (vals[i] * 0.05), f"+{vals[i] / 1e8:.1f}억", ha='center', va='bottom',
-                 fontweight='bold')
-    else:
-        plt.bar(cats[i], vals[i], bottom=starts[i], color=cols[i], edgecolor='black', zorder=3)
-        lbl = f"{vals[i] / 1e8:+.1f}억"
-        # 라벨 위치 조정
-        offset = 1e8 if vals[i] >= 0 else -2e8
-        plt.text(cats[i], starts[i] + vals[i] + offset, lbl, ha='center', fontweight='bold')
-
-for i in range(len(cats) - 1):
-    end = starts[i] + vals[i]
-    plt.plot([i, i + 1], [end, end], color='gray', linestyle='--')
-
-plt.axhline(0, color='black')
-plt.title('Final CSM Impact Analysis (PV Based)')
-plt.ylabel('Value (KRW)')
-plt.grid(axis='y', alpha=0.5)
-plt.gca().yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, p: f'{x / 1e8:.0f}억'))
-plt.tight_layout()
-plt.show()
-
 # ---------------------------------------------------------
-# [Visualization 6] 직관적인 CSM Bridge Chart (가독성 개선)
+# [Visualization 5] CSM Summary Table
 # ---------------------------------------------------------
-import matplotlib.patches as mpatches
+fig, ax = plt.subplots(figsize=(10, 4))
+ax.axis('tight')
+ax.axis('off')
 
-# 데이터 준비 (부호 정리)
-# 이익 요인 (+)
-benefit_claims = delta_pv_claim_benefit  # 보험금 절감
-benefit_ra = delta_pv_ra_benefit  # RA 감소
-impact_premium = delta_pv_premium  # 보험료 변동 (보통 이익이나 손해일 수 있음)
-
-# 비용 요인 (-)
-cost_system = total_expense_pv  # 기기값 + 고정비 (양수로 입력받아 차트에서 뺌)
-
-# 차트용 데이터 리스트
-# 구조: [기초, 사고예방효과, 리스크해소, 보험료변동, 시스템비용, 최종증대분]
-steps = [0, benefit_claims, benefit_ra, impact_premium, -cost_system, total_csm_impact]
-labels = ['기존 모델\n(Baseline)', '사고 방지\n(보험금 절감)', '불확실성 해소\n(RA 감소)',
-          '매출 변동\n(보험료)', '투자 비용\n(기기+고정비)', 'Deep Risk\n최종 가치']
-
-# 워터폴 시작점 계산
-base_values = [0]
-cum_sum = 0
-for i in range(1, len(steps) - 1):
-    cum_sum += steps[i]
-    base_values.append(cum_sum - steps[i] if steps[i] < 0 else cum_sum - steps[i])  # 막대 시작점
-base_values.append(0)  # 마지막 Total 바는 0부터 시작
-
-# 색상 설정 (직관적)
-# 이익: 파란색/초록색 계열, 비용: 붉은색 계열, 결과: 강조색(골드/네이비)
-colors = ['gray', '#2E8B57', '#3CB371', '#1E90FF', '#CD5C5C', '#000080']
-# (Gray, SeaGreen, MediumSeaGreen, DodgerBlue, IndianRed, Navy)
-
-plt.figure(figsize=(12, 7))
-
-# 막대 그리기
-for i in range(len(steps)):
-    # 막대 높이 (절대값)
-    h = abs(steps[i])
-    # 막대 시작점 (bottom)
-    if i == 0 or i == len(steps) - 1:  # 시작과 끝
-        bottom = 0
-        h = steps[i] if i != 0 else 0.1  # 첫 막대는 0이라 안보이므로 스킵
-    else:
-        # 증가분이냐 감소분이냐에 따라 bottom 위치 결정
-        bottom = base_values[i] if steps[i] >= 0 else base_values[i] + steps[i]
-
-    # 마지막 결과 막대 그리기 (첫번째 0은 제외)
-    if i > 0:
-        plt.bar(labels[i], h, bottom=bottom, color=colors[i], edgecolor='black', width=0.6, zorder=3)
-
-        # 값 텍스트 표시
-        val_text = f"{steps[i] / 1e8:+.1f}억" if i != len(steps) - 1 else f"+{steps[i] / 1e8:.1f}억"
-
-        # 텍스트 위치 (막대 위쪽 또는 아래쪽)
-        text_y = bottom + h + (total_csm_impact * 0.02) if steps[i] >= 0 else bottom - (total_csm_impact * 0.05)
-
-        # 마지막 막대는 굵게 강조
-        font_w = 'bold' if i == len(steps) - 1 else 'normal'
-        font_s = 13 if i == len(steps) - 1 else 11
-
-        plt.text(i, text_y, val_text, ha='center', va='bottom' if steps[i] >= 0 else 'top',
-                 fontsize=font_s, fontweight=font_w, color='black')
-
-# 연결선 그리기 (Bridge 효과)
-prev_height = 0
-for i in range(1, len(steps)):
-    # 이전 막대의 끝 높이
-    if i == 1:
-        start_line = 0
-    else:
-        start_line = base_values[i - 1] + steps[i - 1] if steps[i - 1] >= 0 else base_values[i - 1]
-
-    # 현재 막대의 시작 높이와 연결
-    # 단순화: 누적 합계를 따라가면 됨
-    current_height = sum(steps[:i + 1])
-
-    # 선 그리기 (이전 막대 우측 -> 현재 막대 좌측)
-    # plt.plot([i-1.3, i-0.7], [prev_height, prev_height], color='gray', linestyle='--', linewidth=1)
-    # 복잡한 선보다 단순 누적선 표시
-    pass
-
-# 연결선 (Step-wise lines)
-running_total = 0
-for i in range(1, len(steps) - 1):
-    start = running_total
-    running_total += steps[i]
-    end = running_total
-    # 막대 사이를 잇는 선
-    plt.plot([i - 0.3, i + 0.7], [end, end], color='grey', linestyle='--', linewidth=1, zorder=1)
-
-# 기준선
-plt.axhline(0, color='black', linewidth=1.5)
-
-# 타이틀 및 꾸미기
-plt.title('Deep Risk 모델 도입의 경제적 가치 창출 (Net CSM Impact)', fontsize=18, fontweight='bold', pad=20)
-plt.ylabel('가치 변동 (단위: 억 원)', fontsize=12)
-plt.grid(axis='y', linestyle='--', alpha=0.3)
-
-# Y축 포맷
-plt.gca().yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, p: f'{x / 1e8:.0f}억'))
-
-# 범례 추가 (설명 보강)
-handles = [
-    mpatches.Patch(color='#2E8B57', label='가치 창출 (보험금 절감)'),
-    mpatches.Patch(color='#3CB371', label='가치 창출 (불확실성 해소)'),
-    mpatches.Patch(color='#CD5C5C', label='비용 발생 (투자)'),
-    mpatches.Patch(color='#000080', label='최종 순이익 (Net CSM)')
+# 표 데이터 준비
+csm_data = [
+    ["1. 보험금 절감 효과", f"+ {delta_pv_claim_benefit/1e8:.2f} 억 원", "고위험군 사전 선별로 인한 지급 감소"],
+    ["2. RA(불확실성) 해소", f"+ {delta_pv_ra_benefit/1e8:.2f} 억 원", "예측 정확도 향상으로 자본 비용 절감"],
+    ["3. 보험료 수입 변동", f"{delta_pv_premium/1e8:+.2f} 억 원", "우량체 할인/위험군 이탈의 순효과"],
+    ["4. 투자 비용 (Cost)", f"- {total_expense_pv/1e8:.2f} 억 원", "CGM 기기 보급 및 시스템 고정비"],
+    ["-------------------", "----------------", "--------------------------------"],
+    ["▶ 최종 CSM 증대분", f"+ {total_csm_impact/1e8:.2f} 억 원", "IFRS 17 기준 미래 확정 이익 증가"]
 ]
-plt.legend(handles=handles, loc='upper left')
 
-plt.tight_layout()
+col_labels = ["항목 (Category)", "가치 변동 (Value)", "비고 (Note)"]
+
+# 테이블 생성
+table = ax.table(cellText=csm_data, colLabels=col_labels, loc='center', cellLoc='center')
+
+# 테이블 스타일 꾸미기
+table.auto_set_font_size(False)
+table.set_fontsize(12)
+table.scale(1.2, 1.8)  # 크기 조절
+
+# 헤더 색상 및 글자 굵게
+for (row, col), cell in table.get_celld().items():
+    if row == 0:
+        cell.set_text_props(weight='bold', color='white')
+        cell.set_facecolor('#404040')  # 헤더 배경색
+    elif row == 5:  # 마지막 합계 행
+        cell.set_text_props(weight='bold', color='blue')
+        cell.set_facecolor('#e6f2ff')  # 합계 배경색
+
+    # 테두리 조정
+    cell.set_edgecolor('black')
+    cell.set_linewidth(1)
+
+plt.title('Deep Risk Project: IFRS 17 Financial Impact Analysis', fontsize=16, fontweight='bold', y=1.05)
 plt.show()
