@@ -297,7 +297,7 @@ print("[Step 3: IFRS 17 RA(위험조정) 산출 및 CSM 효과 분석]")
 
 # 설정 변수
 N_ITERATIONS = 5000  # 몬테카를로 시뮬레이션 횟수
-CONFIDENCE_LEVEL = 0.995  # IFRS 17 신뢰수준 (보통 75~90% 사이 사용)
+CONFIDENCE_LEVEL = 0.850  # IFRS 17 신뢰수준 (보통 75~90% 사이 사용)
 CLAIM_AMT = 30_000_000  # 사고당 보험금
 
 # 1. 각 모델별 사고 확률 예측 (10년 내 사고 확률)
@@ -730,3 +730,262 @@ plt.show()
 print("=" * 60)
 print(">> 모든 시뮬레이션 및 분석 완료.")
 print(">> [결론] CGM 기반 Dynamic Pricing은 수익성(CSM)과 건전성(K-ICS)을 동시에 개선함.")
+
+# =========================================================
+# [Part 11] 보험위험액(Insurance Risk Capital) 시뮬레이션 (최종 수정본)
+# =========================================================
+print("=" * 60)
+print("[Step 7: K-ICS 보험위험액(생명/장기손보) 산출 - Grade 5 거절 효과]")
+
+# 1. K-ICS 충격 계수 (보험 사고율 20% 급증 가정)
+INSURANCE_SHOCK_FACTOR = 0.20
+
+# 2. 언더라이팅(U/W) 로직 적용 (Part 3, 4의 가정 계승)
+# 논리: "Grade 5(고위험군)는 가입 거절된다."
+# 핵심: 기존 모델과 신규 모델이 '누구를 받아주었는지'가 다름.
+
+# (1) 기존 모델 포트폴리오 (HbA1c 기준 1~4등급만 수용)
+mask_accept_old = (df['Old_Grade'] < 5)
+prob_portfolio_old = prob_new[mask_accept_old] # 기존 심사를 통과한 사람들의 실제 위험도
+
+# (2) 신규 모델 포트폴리오 (CGM 기준 1~4등급만 수용)
+mask_accept_new = (df['New_Grade'] < 5)
+prob_portfolio_new = prob_new[mask_accept_new] # 신규 심사를 통과한 사람들의 실제 위험도
+
+# 3. 규모 보정 (Scaling)
+# "동일하게 5,000명을 받았을 때, 리스크 총량이 얼마나 줄어드는가?"를 비교해야 함.
+avg_risk_old = np.mean(prob_portfolio_old) # 기존 가입자들의 평균 부도율
+avg_risk_new = np.mean(prob_portfolio_new) # 신규 가입자들의 평균 부도율
+
+# 5,000명 풀(Full)로 채웠다고 가정했을 때의 위험도 배열 생성
+prob_old_scaled = np.full(N_SAMPLES, avg_risk_old)
+prob_new_scaled = np.full(N_SAMPLES, avg_risk_new)
+
+# 4. 충격 손실 함수 (기존과 동일)
+def calculate_shocked_loss(prob_array, shock_factor, claim_amt):
+    # 충격된 확률 (Max 1.0)
+    shocked_prob = np.clip(prob_array * (1 + shock_factor), 0, 1)
+    expected_events = np.sum(shocked_prob)
+    return expected_events * claim_amt
+
+# 5. 보험위험액(RC) 산출
+# RC = 충격 시 손실 - 기본 손실 (Net Amount at Risk under Shock)
+
+# [Old Model]
+base_loss_old = np.sum(prob_old_scaled) * CLAIM_AMT
+shock_loss_old = calculate_shocked_loss(prob_old_scaled, INSURANCE_SHOCK_FACTOR, CLAIM_AMT)
+rc_ins_old = shock_loss_old - base_loss_old
+
+# [New Model]
+base_loss_new = np.sum(prob_new_scaled) * CLAIM_AMT
+shock_loss_new = calculate_shocked_loss(prob_new_scaled, INSURANCE_SHOCK_FACTOR, CLAIM_AMT)
+rc_ins_new = shock_loss_new - base_loss_new
+
+# 절감액
+rc_ins_saving = rc_ins_old - rc_ins_new
+
+# 6. 결과 출력
+print(f"--- 언더라이팅 정책 일관성 적용 (Grade 5 가입 거절) ---")
+print(f"1. 기존 포트폴리오 평균 사고율 : {avg_risk_old*100:.3f}% (숨겨진 고위험군 포함)")
+print(f"2. 신규 포트폴리오 평균 사고율 : {avg_risk_new*100:.3f}% (숨겨진 고위험군 제거)")
+print(f"3. 보험위험액(RC) 비교")
+print(f"   - 기존 모델 : {rc_ins_old/1e8:.2f} 억 원")
+print(f"   - 제안 모델 : {rc_ins_new/1e8:.2f} 억 원")
+print(f"   - 절감 효과 : +{rc_ins_saving/1e8:.2f} 억 원 (▼ {((rc_ins_old - rc_ins_new)/rc_ins_old)*100:.1f}%)")
+
+# Final Total Calculation
+total_rc_saving = rc_saving + rc_ins_saving
+print("-" * 60)
+print(f"▶ [Final] 총 요구자본(Total RC) 절감 : +{total_rc_saving/1e8:.2f} 억 원")
+print(f"   (금리위험 {rc_saving/1e8:.2f}억 + 보험위험 {rc_ins_saving/1e8:.2f}억)")
+
+# [Visualization] Insurance Risk Comparison
+fig, ax = plt.subplots(figsize=(8, 6))
+
+risks = ['Interest Rate Risk\n(금리위험)', 'Insurance Risk\n(보험위험)']
+old_vals = [rc_old_alm/1e8, rc_ins_old/1e8]
+new_vals = [rc_new_alm/1e8, rc_ins_new/1e8]
+
+x = np.arange(len(risks))
+width = 0.35
+
+rects1 = ax.bar(x - width/2, old_vals, width, label='Old Model (HbA1c U/W)', color='#bdc3c7')
+rects2 = ax.bar(x + width/2, new_vals, width, label='New Model (CGM U/W)', color='#e74c3c')
+
+ax.set_ylabel('Required Capital (억 원)')
+ax.set_title('K-ICS Risk Capital Breakdown (Consistent U/W Logic)', fontweight='bold')
+ax.set_xticks(x)
+ax.set_xticklabels(risks)
+ax.legend()
+ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda y, _: f'{y:.0f}억'))
+
+def autolabel(rects):
+    for rect in rects:
+        height = rect.get_height()
+        ax.annotate(f'{height:.2f}억',
+                    xy=(rect.get_x() + rect.get_width() / 2, height),
+                    xytext=(0, 3),
+                    textcoords="offset points",
+                    ha='center', va='bottom', fontweight='bold')
+
+autolabel(rects1)
+autolabel(rects2)
+
+plt.tight_layout()
+plt.show()
+
+# =========================================================
+# [Part 12] 보험위험액 절감 효과 시각화 (Waterfall Chart)
+# =========================================================
+print("=" * 60)
+print("[Step 8: 보험위험액 절감 Waterfall Chart 시각화]")
+
+fig, ax = plt.subplots(figsize=(10, 7))
+
+# 1. 데이터 준비
+vals = [rc_ins_old / 1e8, rc_ins_saving / 1e8, rc_ins_new / 1e8]
+x_pos = np.arange(3)
+labels = ['기존 모델\n(HbA1c U/W)', '위험 절감분\n(Risk Reduction)', '제안 모델\n(CGM U/W)']
+
+# 2. 바 차트 그리기
+# (1) 기존 모델 (Start) - 회색
+p1 = ax.bar(x_pos[0], vals[0], width=0.5, color='#95a5a6', edgecolor='black', zorder=3)
+
+# (2) 절감분 (Reduction) - 녹색
+# 위치: 신규 모델의 높이(bottom)에서 시작해서 절감분만큼 위로 그려줌 (시각적으로는 위에서 아래로 깎인 느낌)
+p2 = ax.bar(x_pos[1], vals[1], bottom=vals[2], width=0.5, color='#2ecc71', edgecolor='black', hatch='//', zorder=3)
+
+# (3) 제안 모델 (End) - 파란색
+p3 = ax.bar(x_pos[2], vals[2], width=0.5, color='#3498db', edgecolor='black', zorder=3)
+
+# 3. 연결선 그리기
+# 기존 모델 꼭대기 -> 절감분 꼭대기
+ax.plot([0, 1], [vals[0], vals[0]], color='black', linestyle='--', linewidth=1.5, zorder=4)
+# 절감분 바닥 -> 제안 모델 꼭대기
+ax.plot([1, 2], [vals[2], vals[2]], color='black', linestyle='--', linewidth=1.5, zorder=4)
+
+
+# 4. 수치 텍스트 추가
+def add_value_labels(rects, is_reduction=False):
+    for rect in rects:
+        height = rect.get_height()
+        # 텍스트 위치 계산
+        if is_reduction:
+            y_pos = rect.get_y() + height / 2
+            label = f"-{height:.2f}억\n(SAVE)"
+            color = 'black'  # 가독성을 위해 검정
+        else:
+            y_pos = height + 1  # 바 위쪽
+            label = f"{height:.2f}억"
+            color = 'black'
+
+        # 텍스트 출력
+        ax.text(rect.get_x() + rect.get_width() / 2, y_pos, label,
+                ha='center', va='bottom' if not is_reduction else 'center',
+                fontweight='bold', fontsize=13, color=color,
+                bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
+
+
+add_value_labels(p1)
+add_value_labels(p2, is_reduction=True)
+add_value_labels(p3)
+
+# 5. 그래프 꾸미기
+ax.set_ylabel('요구자본 (단위: 억 원)', fontsize=12, fontweight='bold')
+ax.set_title('K-ICS 보험위험액(Insurance Risk) 절감 구조 분석', fontsize=16, fontweight='bold', pad=20)
+ax.set_xticks(x_pos)
+ax.set_xticklabels(labels, fontsize=12, fontweight='bold')
+ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, p: f'{x:.0f}억'))
+ax.grid(axis='y', linestyle='--', alpha=0.3, zorder=0)
+ax.set_ylim(0, vals[0] * 1.15)  # 위쪽 여백 확보
+
+plt.tight_layout()
+plt.show()
+
+print(">> Waterfall Chart 생성 완료.")
+
+# =========================================================
+# [Part 13] 최종 K-ICS Ratio 시뮬레이션
+# =========================================================
+print("=" * 60)
+print("[Step 9: 최종 K-ICS 비율 시뮬레이션 (BEL 및 RA 효과 통합 반영)]")
+
+# ---------------------------------------------------------
+# 1. 기본 설정 (한화생명 공시 자료)
+# ---------------------------------------------------------
+baseline_available_capital = 14.8 * 1e12
+baseline_required_capital = 9.4 * 1e12
+
+# ---------------------------------------------------------
+# 2. 스케일링 (Scaling)
+# ---------------------------------------------------------
+target_customers = 250000
+scaling_factor = target_customers / N_SAMPLES
+
+# ---------------------------------------------------------
+# 3. 가용자본 변화액 (Delta Available Capital)
+# ---------------------------------------------------------
+
+
+# (1) 경제적 순이익
+# CSM+RA
+delta_profit = (total_csm_impact-delta_pv_ra_benefit) * scaling_factor
+
+# 총 가용자본 증가액
+delta_available = delta_profit
+
+# ---------------------------------------------------------
+# 4. 요구자본 변화액 (Delta Required Capital)
+# ---------------------------------------------------------
+# 신규 리스크 총량 (Part 9 금리위험 + Part 11 보험위험)
+total_new_risk_sample = rc_saving + rc_ins_saving
+delta_required = total_new_risk_sample * scaling_factor
+
+# ---------------------------------------------------------
+# 5. 최종 비율 계산
+# ---------------------------------------------------------
+new_available_capital = baseline_available_capital + delta_available
+new_required_capital = baseline_required_capital - delta_required
+
+old_kics_ratio = (baseline_available_capital / baseline_required_capital) * 100
+new_kics_ratio = (new_available_capital / new_required_capital) * 100
+kics_change = new_kics_ratio - old_kics_ratio
+
+# ---------------------------------------------------------
+# 6. 결과 출력
+# ---------------------------------------------------------
+print(f"=== K-ICS Ratio Simulation Results (N={target_customers:,}) ===")
+print(f"1. 기존 K-ICS 비율: {old_kics_ratio:.2f}%")
+print(f"   (가용: {baseline_available_capital/1e12:.2f}조 / 요구: {baseline_required_capital/1e12:.2f}조)")
+print("-" * 50)
+print(f"2. 자본 변동 상세 (가용자본 증가 요인)")
+print(f"   경제적 이익: +{delta_profit/1e8:,.0f} 억 원")
+print(f"   => 가용자본 총 증가액:       +{delta_available/1e8:,.0f} 억 원")
+print("-" * 50)
+print(f"3. 자본 변동 상세 (요구자본 증가 요인)")
+print(f"   => 요구자본 총 증가액:       +{delta_required/1e8:,.0f} 억 원")
+print("-" * 50)
+print(f"4. 변경 후 K-ICS 비율: {new_kics_ratio:.2f}%")
+print(f"   (가용: {new_available_capital/1e12:.4f}조 / 요구: {new_required_capital/1e12:.4f}조)")
+print(f"5. 변동폭: {kics_change:+.3f}%p")
+
+# ---------------------------------------------------------
+# 7. 시각화
+# ---------------------------------------------------------
+plt.figure(figsize=(10, 6))
+labels = ['Before', 'After']
+values = [old_kics_ratio, new_kics_ratio]
+colors = ['gray', '#1f77b4' if kics_change > 0 else '#d62728']
+
+bars = plt.bar(labels, values, color=colors, width=0.5)
+plt.ylim(min(values)-0.5, max(values)+0.5)
+
+for bar in bars:
+    h = bar.get_height()
+    plt.text(bar.get_x()+bar.get_width()/2, h + 0.05, f"{h:.2f}%", ha='center', fontweight='bold', fontsize=14)
+
+plt.title(f"Final K-ICS Ratio Impact\n(Available Capital = Profit(BEL) + RA Savings)", fontsize=14, fontweight='bold')
+plt.ylabel("K-ICS Ratio (%)")
+plt.grid(axis='y', linestyle='--', alpha=0.5)
+plt.tight_layout()
+plt.show()
