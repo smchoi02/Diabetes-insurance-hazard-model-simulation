@@ -8,9 +8,6 @@ import matplotlib.patches as mpatches
 from matplotlib import font_manager, rc
 import platform
 
-# ---------------------------------------------------------
-# [Fix] 한글 폰트 설정
-# ---------------------------------------------------------
 plt.rcParams['axes.unicode_minus'] = False
 
 if platform.system() == 'Windows':
@@ -26,7 +23,7 @@ else:
     print("Warning: 한글 폰트가 지원되지 않는 환경일 수 있습니다.")
 
 # =========================================================
-# [Part 1] 데이터 생성 (기존 로직 100% 유지)
+# [Part 1] 데이터 생성
 # =========================================================
 np.random.seed(42)
 N_SAMPLES = 5000
@@ -51,7 +48,7 @@ E = (T < TIME_HORIZON).astype(int)
 df = pd.DataFrame({'T': T, 'E': E, 'HbA1c': hba1c, 'CV': cv, 'TIR': tir, 'Hazard': hazard_score})
 
 # =========================================================
-# [Part 2] 통계적 모델 검증 (기존 유지)
+# [Part 2] 통계적 모델 검증 
 # =========================================================
 print("=" * 60)
 print("[Step 1: 통계적 모델 성능 비교]")
@@ -104,7 +101,7 @@ plt.tight_layout()
 plt.show()
 
 # =========================================================
-# [Part 3] 등급 산정 & NRI (기존 유지)
+# [Part 3] 등급 산정 & NRI
 # =========================================================
 GRADE_CUTOFFS = [5.7, 6.5, 7.5, 9.0]
 new_thresholds = []
@@ -181,8 +178,7 @@ breakdown = {
     'Wrong_Acq_Loss': 0
 }
 
-# [중요] CSM 계산 시 정합성을 위해 반응 여부(is_reacting)를 여기서 생성 및 고정
-# 난수 생성 순서나 결과에 전혀 영향을 주지 않으면서 리스트에만 담습니다.
+# CSM 계산 시 정합성을 위해 반응 여부(is_reacting)를 여기서 생성 및 고정
 is_reacting_list = []
 
 for idx, row in df.iterrows():
@@ -732,7 +728,7 @@ print(">> 모든 시뮬레이션 및 분석 완료.")
 print(">> [결론] CGM 기반 Dynamic Pricing은 수익성(CSM)과 건전성(K-ICS)을 동시에 개선함.")
 
 # =========================================================
-# [Part 11] 보험위험액(Insurance Risk Capital) 시뮬레이션 (최종 수정본)
+# [Part 11] 보험위험액(Insurance Risk Capital) 시뮬레이션
 # =========================================================
 print("=" * 60)
 print("[Step 7: K-ICS 보험위험액(생명/장기손보) 산출 - Grade 5 거절 효과]")
@@ -988,4 +984,5 @@ plt.title(f"Final K-ICS Ratio Impact\n(Available Capital = Profit(BEL) + RA Savi
 plt.ylabel("K-ICS Ratio (%)")
 plt.grid(axis='y', linestyle='--', alpha=0.5)
 plt.tight_layout()
+
 plt.show()
